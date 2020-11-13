@@ -9,3 +9,4 @@ edition = "2018"
 [dependencies]
 inotify = "0.9.1"
 rocket = "0.4.6"
+uuid = { version = "0.8", features = ["v4"] }
