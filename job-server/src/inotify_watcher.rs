@@ -11,7 +11,7 @@ pub fn init_watcher(path: PathBuf, pool: WorkPool) {
     thread::spawn(move || {
         let mut inotify = Inotify::init().expect("Inotify couldn't be initialized.");
         inotify.add_watch(
-            path,
+            &path,
             WatchMask::CREATE | WatchMask::MODIFY,
         );
 
@@ -23,7 +23,7 @@ pub fn init_watcher(path: PathBuf, pool: WorkPool) {
                     if let Some(name) = event.name {
                         let mut work_pool = pool.lock().unwrap();
 
-                        work_pool.push(PathBuf::from(name));
+                        work_pool.push(path.join(name));
                     }
                 }
             }

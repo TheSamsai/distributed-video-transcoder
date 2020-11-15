@@ -23,6 +23,8 @@ use std::path::PathBuf;
 use std::time::Instant;
 use std::time::Duration;
 
+use std::env;
+
 type WorkPool = Arc<Mutex<Vec<PathBuf>>>;
 type AssignedWork = Arc<Mutex<HashMap<Uuid, PathBuf>>>;
 type LastCheckIn = Arc<Mutex<HashMap<Uuid, Instant>>>;
@@ -59,6 +61,20 @@ fn ping(node_uuid: NodeUuid, check_ins: State<LastCheckIn>) -> String {
     return String::from("Ok");
 }
 
+fn reallocate_job(last_check_in: &HashMap<Uuid, Instant>, assigned_work: &mut HashMap<Uuid, PathBuf>) -> Option<PathBuf> {
+    let keys: Vec<Uuid> = assigned_work.keys().map(|k| k.clone()).collect();
+
+    for key in keys.iter() {
+        let instant = last_check_in.get(key).unwrap();
+
+        if instant.elapsed() > Duration::new(60, 0) {
+            return assigned_work.remove(key);
+        }
+    }
+
+    return None;
+}
+
 #[get("/pull")]
 fn pull(node_uuid: NodeUuid, check_ins: State<LastCheckIn>, assigned: State<AssignedWork>, pool: State<WorkPool>) -> String {
     let uuid = Uuid::parse_str(&node_uuid.0).expect("UUID didn't parse correctly");
@@ -68,6 +84,11 @@ fn pull(node_uuid: NodeUuid, check_ins: State<LastCheckIn>, assigned: State<Assi
     if ci.contains_key(&uuid) {
         let mut assigned_work = assigned.lock().unwrap();
         let mut work_pool = pool.lock().unwrap();
+
+        if let Some(path) = reallocate_job(&ci, &mut assigned_work) {
+            assigned_work.insert(uuid, path.clone());
+            return String::from(path.to_str().unwrap());
+        }
 
         if let Some(path) = work_pool.pop() {
             assigned_work.insert(uuid, path.clone());
@@ -108,7 +129,7 @@ fn main() {
     let assigned_work: AssignedWork = Arc::new(Mutex::new(HashMap::new()));
     let last_check_in: LastCheckIn = Arc::new(Mutex::new(HashMap::new()));
 
-    inotify_watcher::init_watcher(PathBuf::from("incoming"), work_pool.clone());
+    inotify_watcher::init_watcher(env::current_dir().unwrap().join("incoming"), work_pool.clone());
 
     rocket::ignite()
         .manage(work_pool)
