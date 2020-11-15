@@ -61,6 +61,18 @@ fn ping(node_uuid: NodeUuid, check_ins: State<LastCheckIn>) -> String {
     return String::from("Ok");
 }
 
+
+#[get("/push")]
+fn push(node_uuid: NodeUuid, assigned: State<AssignedWork>) -> String {
+    let uuid = Uuid::parse_str(&node_uuid.0).expect("UUID didn't parse correctly");
+
+    let mut assigned_work = assigned.lock().unwrap();
+
+    assigned_work.remove(&uuid);
+
+    return String::from("Thanks");
+}
+
 fn reallocate_job(last_check_in: &HashMap<Uuid, Instant>, assigned_work: &mut HashMap<Uuid, PathBuf>) -> Option<PathBuf> {
     let keys: Vec<Uuid> = assigned_work.keys().map(|k| k.clone()).collect();
 
@@ -135,5 +147,5 @@ fn main() {
         .manage(work_pool)
         .manage(assigned_work)
         .manage(last_check_in)
-        .mount("/", routes![index, register, pull, ping]).launch();
+        .mount("/", routes![index, register, pull, push, ping]).launch();
 }
