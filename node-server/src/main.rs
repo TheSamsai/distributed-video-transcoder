@@ -5,6 +5,8 @@ use reqwest::Result;
 use reqwest::Url;
 use std::env;
 
+use std::time::Duration;
+
 async fn get_uuid(address: String) -> Result<String> {
     let body = reqwest::get(&address).await?.text().await?;
 
@@ -14,12 +16,12 @@ async fn get_uuid(address: String) -> Result<String> {
     return Ok(body);
 }
 
-async fn pull_job(adress: String, uuid: String) -> Result<String> {
+async fn pull_job(address: String, uuid: &String) -> Result<String> {
     let client = reqwest::Client::new();
 
     let path = client
-        .get(&adress)
-        .header("uuid", &uuid)
+        .get(&address)
+        .header("uuid", uuid)
         .send()
         .await?
         .text()
@@ -40,24 +42,26 @@ async fn main() -> Result<()> {
     } else {
         panic!("Usage: {} <server's URL>", &args[0]);
     };
+
     let uuid = get_uuid(serv_address.join("/register").unwrap().into_string())
         .await
         .unwrap();
+
     println!("{}", uuid);
 
     loop {
         let job = pull_job(
             serv_address.join("/pull").unwrap().to_string(),
-            uuid.to_string(),
+            &uuid,
         )
         .await
         .unwrap();
         println!("{}", job);
 
         if job.len() == 0 {
-            eprint!("Now availible job paths");
+            eprint!("No available job paths");
             //Sleep for 30 secs before asking for new jobs
-            std::thread::sleep(std::time::Duration::from_secs(30));
+            tokio::time::delay_for(Duration::from_secs(30));
         } else {
             let conversion = std::process::Command::new("ffmpeg")
                 .arg("-i")

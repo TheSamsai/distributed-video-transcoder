@@ -19,15 +19,27 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::path::PathBuf;
+use std::path::Path;
 
 use std::time::Instant;
 use std::time::Duration;
 
 use std::env;
 
-type WorkPool = Arc<Mutex<Vec<PathBuf>>>;
-type AssignedWork = Arc<Mutex<HashMap<Uuid, PathBuf>>>;
+/* NOTE: These are the data types used to hold the server state
+ *
+ * THEY MUST ALWAYS BE LOCKED IN THE FOLLOWING ORDER:
+ * 1. LastCheckIn
+ * 2. AssignedWork
+ * 3. WorkPool
+ *
+ * Not doing so can cause the system to deadlock
+ *
+ * Locking any of them individually is safe
+*/
 type LastCheckIn = Arc<Mutex<HashMap<Uuid, Instant>>>;
+type AssignedWork = Arc<Mutex<HashMap<Uuid, PathBuf>>>;
+type WorkPool = Arc<Mutex<Vec<PathBuf>>>;
 
 struct NodeUuid(String);
 
@@ -62,15 +74,19 @@ fn ping(node_uuid: NodeUuid, check_ins: State<LastCheckIn>) -> String {
 }
 
 
-#[get("/push")]
+#[post("/push")]
 fn push(node_uuid: NodeUuid, assigned: State<AssignedWork>) -> String {
     let uuid = Uuid::parse_str(&node_uuid.0).expect("UUID didn't parse correctly");
 
     let mut assigned_work = assigned.lock().unwrap();
 
-    assigned_work.remove(&uuid);
+    if let Some(path) = assigned_work.remove(&uuid) {
+        std::fs::remove_file(path).expect("Couldn't remove the file");
 
-    return String::from("Thanks");
+        return String::from("Thanks!");
+    }
+
+    return String::from("No work found.")
 }
 
 fn reallocate_job(last_check_in: &HashMap<Uuid, Instant>, assigned_work: &mut HashMap<Uuid, PathBuf>) -> Option<PathBuf> {
