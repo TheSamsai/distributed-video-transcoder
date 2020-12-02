@@ -9,7 +9,6 @@ use std::time::Duration;
 use tokio::time;
 
 static PING_TIMEOUT_SEC: u64 = 30;
-static FINISHED_SERV_DIR: &str = "ready";
 
 async fn get_uuid(address: String) -> Result<String> {
     let body = reqwest::get(&address).await?.text().await?;
@@ -125,13 +124,13 @@ async fn main() {
 
             let info = get_job_info(serv_address.join("/info").unwrap().to_string()).await;
 
-            println!("rsync {} {}", info.rsync_user.clone() + "@" + serv_address.host_str().unwrap() + ":" + &job, jobs_dir.to_str().unwrap());
+            println!("rsync {} {}", info.rsync_user.clone() + "@" + serv_address.host_str().unwrap() + ":" + job_pathbuf.to_str().unwrap(), jobs_dir.to_str().unwrap());
 
             let mut rsync_from_serv = std::process::Command::new("rsync")
                 .arg("-az")
                 .arg("-e")
                 .arg("ssh")
-                .arg(info.rsync_user.clone() + "@" + serv_address.host_str().unwrap() + ":" + &job)
+                .arg(info.rsync_user.clone() + "@" + serv_address.host_str().unwrap() + ":" + job_pathbuf.to_str().unwrap())
                 .arg(jobs_dir.to_str().unwrap())
                 .spawn()
                 .expect("Couldn't launch rsync");
@@ -158,7 +157,7 @@ async fn main() {
 
             let mut rsync_to_serv = std::process::Command::new("rsync")
                 .arg("-az")
-                .arg(output_file.clone)
+                .arg(output_file.clone())
                 .arg(
                    info.rsync_user.clone()
                         + "@"
