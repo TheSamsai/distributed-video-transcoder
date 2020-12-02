@@ -9,7 +9,6 @@ use std::time::Duration;
 use tokio::time;
 
 static PING_TIMEOUT_SEC: u64 = 30;
-static RSYNC_USER: &str = "mina";
 static FINISHED_SERV_DIR: &str = "ready";
 
 async fn get_uuid(address: String) -> Result<String> {
@@ -49,6 +48,35 @@ async fn ping_timeout(address: String, uuid: String) {
         println!("PING");
 
         time::delay_for(Duration::from_secs(PING_TIMEOUT_SEC - 1)).await;
+    }
+}
+
+struct Info {
+    ffmpeg_command: String,
+    file_extension: String,
+    completed_files_dir: String,
+    rsync_user: String,
+}
+
+async fn get_job_info(address: String) -> Info {
+    let client = reqwest::Client::new();
+
+    let body = client
+        .get(&address)
+        .send()
+        .await
+        .expect("Error getting job info")
+        .text()
+        .await
+        .expect("Error getting job info");
+
+    let lines: Vec<&str> = body.split("\n").collect();
+
+    Info {
+        ffmpeg_command: lines[0].replace("ffmpeg: ", ""),
+        file_extension: lines[1].replace("file_extension: ", ""),
+        completed_files_dir: lines[2].replace("completed: ", ""),
+        rsync_user: lines[3].replace("rsync_user: ", ""),
     }
 }
 
@@ -95,48 +123,55 @@ async fn main() {
         } else {
             let job_pathbuf = std::path::Path::new(&job);
 
-            let rsync_result = std::process::Command::new("rsync")
+            let info = get_job_info(serv_address.join("/info").unwrap().to_string()).await;
+
+            println!("rsync {} {}", info.rsync_user.clone() + "@" + serv_address.host_str().unwrap() + ":" + &job, jobs_dir.to_str().unwrap());
+
+            let mut rsync_from_serv = std::process::Command::new("rsync")
                 .arg("-az")
-                .arg(RSYNC_USER.to_string() + "@" + serv_address.host_str().unwrap() + ":" + &job)
+                .arg("-e")
+                .arg("ssh")
+                .arg(info.rsync_user.clone() + "@" + serv_address.host_str().unwrap() + ":" + &job)
                 .arg(jobs_dir.to_str().unwrap())
-                .status();
-            match rsync_result {
-                Ok(f) => f,
-                Err(e) => panic!("Error calling rsync for job file {:?}", e),
-            };
+                .spawn()
+                .expect("Couldn't launch rsync");
 
-            let input_file = jobs_dir.to_str().unwrap().to_string()
-                + job_pathbuf.file_name().unwrap().to_str().unwrap();
-            let output_file = jobs_dir.to_str().unwrap().to_string()
-                + job_pathbuf.file_stem().unwrap().to_str().unwrap()
-                + ".webm";
+            while let Ok(None) = rsync_from_serv.try_wait() {
+                tokio::time::delay_for(Duration::from_millis(100)).await;
+            }
 
-            let conversion = std::process::Command::new("ffmpeg")
-                .arg("-i")
-                .arg(&input_file)
-                .arg("-o")
-                .arg(&output_file)
-                .status();
-            match conversion {
-                Ok(c) => c,
-                Err(e) => panic!("Error calling ffmpeg {:?}", e),
-            };
+            let input_file = String::from(jobs_dir.join(job_pathbuf.file_name().unwrap()).to_str().unwrap());
+            let output_file = String::from(jobs_dir.join(job_pathbuf.file_stem().unwrap()).to_str().unwrap()) + &info.file_extension;
 
-            let rsync_to_serv = std::process::Command::new("rsync")
+            println!("{}", output_file);
+
+            let ffmpeg_command = info.ffmpeg_command.split(" ").map(|w| w.replace("[input]", &input_file)).map(|w| w.replace("[output]", &output_file));
+
+            let mut conversion = std::process::Command::new("ffmpeg")
+                .args(ffmpeg_command.skip(1))
+                .spawn()
+                .expect("Couldn't start ffmpeg");
+
+            while let Ok(None) = conversion.try_wait() {
+                tokio::time::delay_for(Duration::from_millis(100)).await;
+            }
+
+            let mut rsync_to_serv = std::process::Command::new("rsync")
                 .arg("-az")
-                .arg(&output_file)
+                .arg(output_file.clone)
                 .arg(
-                    RSYNC_USER.to_string()
+                   info.rsync_user.clone()
                         + "@"
                         + serv_address.host_str().unwrap()
                         + ":"
-                        + FINISHED_SERV_DIR,
+                        + &info.completed_files_dir,
                 )
-                .status();
-            match rsync_to_serv {
-                Ok(f) => f,
-                Err(e) => panic!("Error calling rsync back to server {:?}", e),
-            };
+                .spawn()
+                .expect("Couldn't run rsync");
+
+            while let Ok(None) = rsync_to_serv.try_wait() {
+                tokio::time::delay_for(Duration::from_millis(100)).await;
+            }
 
             job_requests(serv_address.join("/push").unwrap().to_string(), &uuid)
                 .await
@@ -144,7 +179,7 @@ async fn main() {
 
             std::fs::remove_file(&output_file).expect("Couldn't remove output file");
             std::fs::remove_file(&input_file).expect("Couldn't remove input file");
-            //let resultt = std::process::Command::new("sleep").arg("20").status();
+            // let resultt = std::process::Command::new("sleep").arg("20").status();
         }
     }
 }

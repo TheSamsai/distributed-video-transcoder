@@ -62,6 +62,21 @@ impl<'a, 'r> FromRequest<'a, 'r> for NodeUuid {
     }
 }
 
+#[get("/info")]
+fn info() -> Result<String, std::env::VarError> {
+    let ffmpeg_command = std::env::var("FFMPEG_COMMAND").unwrap_or(String::from("ffmpeg -i [input] -f webm [output].webm"));
+    let file_extension = std::env::var("FILE_EXTENSION")?;
+    let completed_files = std::env::var("COMPLETED_PATH")?;
+    let rsync_user = std::env::var("RSYNC_USER")?;
+
+    Ok(format!(
+"ffmpeg: {}
+file_extension: {}
+completed: {}
+rsync_user: {}
+", ffmpeg_command, file_extension, completed_files, rsync_user))
+}
+
 #[get("/ping")]
 fn ping(node_uuid: NodeUuid, check_ins: State<LastCheckIn>) -> String {
     let uuid = Uuid::parse_str(&node_uuid.0).expect("UUID didn't parse correctly");
@@ -74,7 +89,7 @@ fn ping(node_uuid: NodeUuid, check_ins: State<LastCheckIn>) -> String {
 }
 
 
-#[post("/push")]
+#[get("/push")]
 fn push(node_uuid: NodeUuid, assigned: State<AssignedWork>) -> String {
     let uuid = Uuid::parse_str(&node_uuid.0).expect("UUID didn't parse correctly");
 
@@ -163,5 +178,5 @@ fn main() {
         .manage(work_pool)
         .manage(assigned_work)
         .manage(last_check_in)
-        .mount("/", routes![index, register, pull, push, ping]).launch();
+        .mount("/", routes![index, register, pull, push, ping, info]).launch();
 }
