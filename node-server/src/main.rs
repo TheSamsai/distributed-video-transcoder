@@ -124,12 +124,13 @@ async fn main() {
 
             let info = get_job_info(serv_address.join("/info").unwrap().to_string()).await;
 
-            println!("rsync {} {}", info.rsync_user.clone() + "@" + serv_address.host_str().unwrap() + ":" + job_pathbuf.to_str().unwrap(), jobs_dir.to_str().unwrap());
+            println!("rsync -az -e ssh --protect-args {} {}", info.rsync_user.clone() + "@" + serv_address.host_str().unwrap() + ":\"" + job_pathbuf.to_str().unwrap() + "\"", jobs_dir.to_str().unwrap());
 
             let mut rsync_from_serv = std::process::Command::new("rsync")
                 .arg("-az")
                 .arg("-e")
                 .arg("ssh")
+                .arg("--protect-args")
                 .arg(info.rsync_user.clone() + "@" + serv_address.host_str().unwrap() + ":" + job_pathbuf.to_str().unwrap())
                 .arg(jobs_dir.to_str().unwrap())
                 .spawn()
@@ -157,13 +158,16 @@ async fn main() {
 
             let mut rsync_to_serv = std::process::Command::new("rsync")
                 .arg("-az")
+                .arg("--protect-args")
+                .arg("-e")
+                .arg("ssh")
                 .arg(output_file.clone())
                 .arg(
                    info.rsync_user.clone()
                         + "@"
                         + serv_address.host_str().unwrap()
                         + ":"
-                        + &info.completed_files_dir,
+                        + &info.completed_files_dir
                 )
                 .spawn()
                 .expect("Couldn't run rsync");
