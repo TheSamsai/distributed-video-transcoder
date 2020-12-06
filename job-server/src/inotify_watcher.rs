@@ -18,7 +18,7 @@ pub fn init_watcher(path: PathBuf, pool: WorkPool) {
             let path = entry.unwrap().path();
             if path.is_file() {
                 let mut work_pool = pool.lock().unwrap();
-                work_pool.push(path)
+                work_pool.push_back(path)
             }
         }
         let mut inotify = Inotify::init().expect("Inotify couldn't be initialized.");
@@ -35,7 +35,7 @@ pub fn init_watcher(path: PathBuf, pool: WorkPool) {
                     if let Some(name) = event.name {
                         let mut work_pool = pool.lock().unwrap();
 
-                        work_pool.push(path.join(name));
+                        work_pool.push_back(path.join(name));
                     }
                 }
             }

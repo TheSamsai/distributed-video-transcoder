@@ -16,6 +16,7 @@ use uuid::Uuid;
 mod inotify_watcher;
 
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::path::PathBuf;
@@ -39,7 +40,7 @@ use std::env;
 */
 type LastCheckIn = Arc<Mutex<HashMap<Uuid, Instant>>>;
 type AssignedWork = Arc<Mutex<HashMap<Uuid, PathBuf>>>;
-type WorkPool = Arc<Mutex<Vec<PathBuf>>>;
+type WorkPool = Arc<Mutex<VecDeque<PathBuf>>>;
 
 struct NodeUuid(String);
 
@@ -90,18 +91,34 @@ fn ping(node_uuid: NodeUuid, check_ins: State<LastCheckIn>) -> String {
 
 
 #[get("/push")]
-fn push(node_uuid: NodeUuid, assigned: State<AssignedWork>) -> String {
+fn push(node_uuid: NodeUuid, assigned: State<AssignedWork>, pool: State<WorkPool>) -> Result<String, String> {
     let uuid = Uuid::parse_str(&node_uuid.0).expect("UUID didn't parse correctly");
+
+    let file_extension = std::env::var("FILE_EXTENSION").expect("No FILE_EXTENSION given!");
+    let completed_files = std::env::var("COMPLETED_PATH").expect("No COMPLETED_PATH given!");
 
     let mut assigned_work = assigned.lock().unwrap();
 
     if let Some(path) = assigned_work.remove(&uuid) {
-        std::fs::remove_file(path).expect("Couldn't remove the file");
+        let completed_files_path = PathBuf::from(completed_files);
+        let filename = path.file_name().map(|fname| PathBuf::from(fname).with_extension(file_extension));
 
-        return String::from("Thanks!");
+        if let Some(fname) = filename {
+            if completed_files_path.join(fname).exists() {
+                std::fs::remove_file(path);
+                return Ok(String::from("Thanks!"));
+            } else {
+                let mut work_pool = pool.lock().unwrap();
+
+                work_pool.push_back(path);
+
+                return Err(String::from("Failure, file not submitted"));
+            }
+        }
+
     }
 
-    return String::from("No work found.")
+    return Err(String::from("No work found."));
 }
 
 fn reallocate_job(last_check_in: &HashMap<Uuid, Instant>, assigned_work: &mut HashMap<Uuid, PathBuf>) -> Option<PathBuf> {
@@ -133,7 +150,7 @@ fn pull(node_uuid: NodeUuid, check_ins: State<LastCheckIn>, assigned: State<Assi
             return String::from(path.to_str().unwrap());
         }
 
-        if let Some(path) = work_pool.pop() {
+        if let Some(path) = work_pool.pop_front() {
             assigned_work.insert(uuid, path.clone());
             return String::from(path.to_str().unwrap());
         }
@@ -168,7 +185,7 @@ fn index(work_pool: State<WorkPool>) -> String {
 }
 
 fn main() {
-    let work_pool: WorkPool = Arc::new(Mutex::new(Vec::new()));
+    let work_pool: WorkPool = Arc::new(Mutex::new(VecDeque::new()));
     let assigned_work: AssignedWork = Arc::new(Mutex::new(HashMap::new()));
     let last_check_in: LastCheckIn = Arc::new(Mutex::new(HashMap::new()));
 
