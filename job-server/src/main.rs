@@ -101,7 +101,8 @@ fn push(node_uuid: NodeUuid, assigned: State<AssignedWork>, pool: State<WorkPool
 
     if let Some(path) = assigned_work.remove(&uuid) {
         let completed_files_path = PathBuf::from(completed_files);
-        let filename = path.file_name().map(|fname| PathBuf::from(fname).with_extension(file_extension));
+        let filename = path.file_name()
+                           .map(|fname| PathBuf::from(fname).with_extension(file_extension.replace(".", "")));
 
         if let Some(fname) = filename {
             if completed_files_path.join(fname).exists() {
