@@ -6,4 +6,4 @@ export FILE_EXTENSION=".webm"
 export COMPLETED_PATH="/home/sami/Ohjelmointi/Yliopisto/Distributed-Systems/distributed-video-transcoder/job-server/complete/"
 export RSYNC_USER="sami"
 
-cargo run
+cargo run --release
