@@ -1,6 +1,3 @@
-#![feature(proc_macro_hygiene, decl_macro)]
-
-
 extern crate reqwest;
 extern crate tokio;
 extern crate chrono;

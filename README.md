@@ -2,6 +2,53 @@
 Project for Distributes Systems course aiming to implement a distributed system
 for video transcoding
 
+## Building
+
+The software consists of two components written in the Rust programming
+language. They are found under the ```node-server``` and ```job-server```
+directories.
+
+In order to build the software, you need the Rust compiler and cargo package
+manager. You can install them from https://rustup.rs/.
+
+### Building job-server
+
+The job-server requires the latest nightly version of Rust which can be
+installed through rustup as follows:
+
+``` sh
+rustup install nightly
+```
+
+Then in the job-server directory run the following commands:
+
+``` sh
+rustup override set nightly
+
+cargo build --release
+```
+
+At this point the job-server can be launched using the ```run.sh``` file.
+
+The parameters of the job-server are set in the ```run.sh``` file. Tasks can be
+submitted by moving video files into the ```incoming/``` directory.
+
+### Building node-server
+
+The node-server is the worker component of the system.
+
+Then in the node-server directory run the following commands:
+
+``` sh
+cargo build --release
+```
+
+At this point the job-server can be launched as follows:
+
+``` sh
+cargo run --release http://<ip-address-of-the-job-server>:8000
+```
+
 ## System description and architecture
 
 The system implements a video transcoding service that can distribute video

@@ -17,4 +17,6 @@ COPY --from=build-stage /usr/src /home/user/app
 RUN chown -R user:user /home/user/app
 
 USER user
+WORKDIR /home/user/app
+
 CMD ["/bin/bash"]
