@@ -1,5 +1,9 @@
+#![feature(proc_macro_hygiene, decl_macro)]
+
+
 extern crate reqwest;
 extern crate tokio;
+extern crate chrono;
 
 use reqwest::Result;
 use reqwest::Url;
@@ -8,7 +12,30 @@ use std::env;
 use std::time::Duration;
 use tokio::time;
 
+use serde::Serialize;
+use chrono::{DateTime,Utc}; 
+
+
 static PING_TIMEOUT_SEC: u64 = 30;
+
+
+struct Info {
+    ffmpeg_command: String,
+    file_extension: String,
+    completed_files_dir: String,
+    rsync_user: String,
+}
+
+#[derive(Serialize)]
+#[derive(Debug)]
+struct NodeFailure {
+    uuid: String,
+    timestamp_utc: DateTime<Utc>,
+    ffmepg_conversion:String,
+    rsync_from:String,
+}
+
+
 
 async fn get_uuid(address: String) -> Result<String> {
     let body = reqwest::get(&address).await?.text().await?;
@@ -44,17 +71,21 @@ async fn ping_timeout(address: String, uuid: String) {
             .await
             .expect("Error while pinging server");
 
-        println!("PING");
-
         time::delay_for(Duration::from_secs(PING_TIMEOUT_SEC - 1)).await;
     }
 }
 
-struct Info {
-    ffmpeg_command: String,
-    file_extension: String,
-    completed_files_dir: String,
-    rsync_user: String,
+async fn failure_request(address: String, failure: &NodeFailure) {
+    let client = reqwest::Client::new();
+    
+    client
+        .post(&address)
+        .json(failure)
+        .send()
+        .await
+        .expect("Error while sending failure message");
+    
+
 }
 
 async fn get_job_info(address: String) -> Info {
@@ -156,6 +187,7 @@ async fn main() {
                 tokio::time::delay_for(Duration::from_millis(100)).await;
             }
 
+
             let mut rsync_to_serv = std::process::Command::new("rsync")
                 .arg("-az")
                 .arg("--protect-args")
@@ -176,13 +208,31 @@ async fn main() {
                 tokio::time::delay_for(Duration::from_millis(100)).await;
             }
 
+
+
+            if !std::path::Path::new(&output_file).exists() {
+
+
+                let failure_info: NodeFailure = NodeFailure {
+                    uuid:uuid.clone(),
+                    timestamp_utc: Utc::now(),
+                    ffmepg_conversion: format!("{:?}",conversion.wait_with_output().unwrap()),
+                    rsync_from: format!("{:?}",rsync_from_serv.wait_with_output().unwrap()),
+
+                };
+
+                failure_request(serv_address.join("/failure").unwrap().to_string(), &failure_info).await;
+                panic!("Someting failed while converting\n Converion: {:?}\n Rsycn form server: {:?}",&failure_info,&failure_info);
+            }
+
+
+
             job_requests(serv_address.join("/push").unwrap().to_string(), &uuid)
                 .await
                 .unwrap();
 
             std::fs::remove_file(&output_file).expect("Couldn't remove output file");
             std::fs::remove_file(&input_file).expect("Couldn't remove input file");
-            // let resultt = std::process::Command::new("sleep").arg("20").status();
         }
     }
 }

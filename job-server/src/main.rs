@@ -1,15 +1,20 @@
 #![feature(proc_macro_hygiene, decl_macro)]
 
-#[macro_use] extern crate rocket;
-
+#[macro_use]
+extern crate rocket;
+extern crate chrono;
+extern crate rocket_contrib;
 extern crate uuid;
 
-use rocket::State;
+use rocket::http::Status;
 use rocket::request;
 use rocket::request::FromRequest;
-use rocket::request::Request;
 use rocket::request::Outcome;
-use rocket::http::Status;
+use rocket::request::Request;
+use std::net::SocketAddr; 
+use rocket::State;
+use rocket_contrib::json::Json;
+use serde::Deserialize;
 
 use uuid::Uuid;
 
@@ -17,13 +22,14 @@ mod inotify_watcher;
 
 use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::path::PathBuf;
-use std::path::Path;
 
-use std::time::Instant;
+use chrono::{DateTime, Utc};
 use std::time::Duration;
+use std::time::Instant;
 
 use std::env;
 
@@ -42,12 +48,21 @@ type LastCheckIn = Arc<Mutex<HashMap<Uuid, Instant>>>;
 type AssignedWork = Arc<Mutex<HashMap<Uuid, PathBuf>>>;
 type WorkPool = Arc<Mutex<VecDeque<PathBuf>>>;
 
+#[derive(Debug, Deserialize)]
+struct NodeFailure {
+    uuid: NodeUuid,
+    timestamp_utc: DateTime<Utc>,
+    ffmepg_conversion: String,
+    rsync_from: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct NodeUuid(String);
 
 #[derive(Debug)]
 enum NodeUuidError {
     Missing,
-    Invalid
+    Invalid,
 }
 
 impl<'a, 'r> FromRequest<'a, 'r> for NodeUuid {
@@ -57,25 +72,57 @@ impl<'a, 'r> FromRequest<'a, 'r> for NodeUuid {
         let keys: Vec<_> = request.headers().get("uuid").collect();
         match keys.len() {
             0 => Outcome::Failure((Status::BadRequest, NodeUuidError::Missing)),
-            1 if Uuid::parse_str(keys[0]).is_ok() => Outcome::Success(NodeUuid(keys[0].to_string())),
+            1 if Uuid::parse_str(keys[0]).is_ok() => {
+                Outcome::Success(NodeUuid(keys[0].to_string()))
+            }
             _ => Outcome::Failure((Status::BadRequest, NodeUuidError::Invalid)),
         }
     }
 }
 
+#[post("/failure", format = "application/json", data = "<node_failure>")]
+fn failure(
+    node_failure: Json<NodeFailure>,
+    remote_addr: SocketAddr,
+    last_check_in: State<LastCheckIn>,
+    assigned: State<AssignedWork>,
+    pool: State<WorkPool>,
+) -> String {
+    let uuid = Uuid::parse_str(&node_failure.0.uuid.0).expect("UUID didn't parse correctly");
+    let mut check_ins = last_check_in.lock().unwrap();
+    let mut assigned_work = assigned.lock().unwrap();
+
+    if let Some(_ci) = check_ins.get(&uuid) {
+        check_ins.remove(&uuid);
+
+        if let Some(path) = assigned_work.remove(&uuid) {
+            let mut work_pool = pool.lock().unwrap();
+            work_pool.push_back(path);
+        }
+       
+        let ip = remote_addr.ip();
+        eprintln!("Node failed:\n IP: {:?}\n Failure: {:?}",ip,node_failure.0);
+        return String::from("Ok");
+    }
+    return String::from("");
+}
+
 #[get("/info")]
 fn info() -> Result<String, std::env::VarError> {
-    let ffmpeg_command = std::env::var("FFMPEG_COMMAND").unwrap_or(String::from("ffmpeg -i [input] -f webm [output].webm"));
+    let ffmpeg_command = std::env::var("FFMPEG_COMMAND")
+        .unwrap_or(String::from("ffmpeg -i [input] -f webm [output].webm"));
     let file_extension = std::env::var("FILE_EXTENSION")?;
     let completed_files = std::env::var("COMPLETED_PATH")?;
     let rsync_user = std::env::var("RSYNC_USER")?;
 
     Ok(format!(
-"ffmpeg: {}
+        "ffmpeg: {}
 file_extension: {}
 completed: {}
 rsync_user: {}
-", ffmpeg_command, file_extension, completed_files, rsync_user))
+",
+        ffmpeg_command, file_extension, completed_files, rsync_user
+    ))
 }
 
 #[get("/ping")]
@@ -89,9 +136,12 @@ fn ping(node_uuid: NodeUuid, check_ins: State<LastCheckIn>) -> String {
     return String::from("Ok");
 }
 
-
 #[get("/push")]
-fn push(node_uuid: NodeUuid, assigned: State<AssignedWork>, pool: State<WorkPool>) -> Result<String, String> {
+fn push(
+    node_uuid: NodeUuid,
+    assigned: State<AssignedWork>,
+    pool: State<WorkPool>,
+) -> Result<String, String> {
     let uuid = Uuid::parse_str(&node_uuid.0).expect("UUID didn't parse correctly");
 
     let file_extension = std::env::var("FILE_EXTENSION").expect("No FILE_EXTENSION given!");
@@ -101,8 +151,9 @@ fn push(node_uuid: NodeUuid, assigned: State<AssignedWork>, pool: State<WorkPool
 
     if let Some(path) = assigned_work.remove(&uuid) {
         let completed_files_path = PathBuf::from(completed_files);
-        let filename = path.file_name()
-                           .map(|fname| PathBuf::from(fname).with_extension(file_extension.replace(".", "")));
+        let filename = path
+            .file_name()
+            .map(|fname| PathBuf::from(fname).with_extension(file_extension.replace(".", "")));
 
         if let Some(fname) = filename {
             if completed_files_path.join(fname).exists() {
@@ -116,13 +167,15 @@ fn push(node_uuid: NodeUuid, assigned: State<AssignedWork>, pool: State<WorkPool
                 return Err(String::from("Failure, file not submitted"));
             }
         }
-
     }
 
     return Err(String::from("No work found."));
 }
 
-fn reallocate_job(last_check_in: &HashMap<Uuid, Instant>, assigned_work: &mut HashMap<Uuid, PathBuf>) -> Option<PathBuf> {
+fn reallocate_job(
+    last_check_in: &HashMap<Uuid, Instant>,
+    assigned_work: &mut HashMap<Uuid, PathBuf>,
+) -> Option<PathBuf> {
     let keys: Vec<Uuid> = assigned_work.keys().map(|k| k.clone()).collect();
 
     for key in keys.iter() {
@@ -137,7 +190,12 @@ fn reallocate_job(last_check_in: &HashMap<Uuid, Instant>, assigned_work: &mut Ha
 }
 
 #[get("/pull")]
-fn pull(node_uuid: NodeUuid, check_ins: State<LastCheckIn>, assigned: State<AssignedWork>, pool: State<WorkPool>) -> String {
+fn pull(
+    node_uuid: NodeUuid,
+    check_ins: State<LastCheckIn>,
+    assigned: State<AssignedWork>,
+    pool: State<WorkPool>,
+) -> String {
     let uuid = Uuid::parse_str(&node_uuid.0).expect("UUID didn't parse correctly");
 
     let mut ci = check_ins.lock().unwrap();
@@ -190,11 +248,15 @@ fn main() {
     let assigned_work: AssignedWork = Arc::new(Mutex::new(HashMap::new()));
     let last_check_in: LastCheckIn = Arc::new(Mutex::new(HashMap::new()));
 
-    inotify_watcher::init_watcher(env::current_dir().unwrap().join("incoming"), work_pool.clone());
+    inotify_watcher::init_watcher(
+        env::current_dir().unwrap().join("incoming"),
+        work_pool.clone(),
+    );
 
     rocket::ignite()
         .manage(work_pool)
         .manage(assigned_work)
         .manage(last_check_in)
-        .mount("/", routes![index, register, pull, push, ping, info]).launch();
+        .mount("/", routes![index, register, pull, push, ping, info, failure])
+        .launch();
 }
