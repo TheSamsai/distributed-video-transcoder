@@ -28,10 +28,30 @@ struct Info {
 struct NodeFailure {
     uuid: String,
     timestamp_utc: DateTime<Utc>,
-    ffmepg_conversion:String,
-    rsync_from:String,
+    ffmepg_conversion:ProcessOutput,
+    rsync_from:ProcessOutput,
+    rsync_to:ProcessOutput,
 }
 
+#[derive(Serialize)]
+#[derive(Debug)]
+struct ProcessOutput{
+    exit_code:i32,
+    stdout: String,
+    stderr: String
+}
+
+impl ProcessOutput {
+
+    fn new(output: &std::process::Output) -> ProcessOutput {
+        ProcessOutput {
+            exit_code: output.status.code().unwrap().clone(),
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+    }
+}
+
+}
 
 
 async fn get_uuid(address: String) -> Result<String> {
@@ -154,19 +174,17 @@ async fn main() {
 
             println!("rsync -az -e ssh --protect-args {} {}", info.rsync_user.clone() + "@" + serv_address.host_str().unwrap() + ":\"" + job_pathbuf.to_str().unwrap() + "\"", jobs_dir.to_str().unwrap());
 
-            let mut rsync_from_serv = std::process::Command::new("rsync")
+            let rsync_from_serv = tokio::process::Command::new("rsync")
                 .arg("-az")
                 .arg("-e")
                 .arg("ssh")
                 .arg("--protect-args")
                 .arg(info.rsync_user.clone() + "@" + serv_address.host_str().unwrap() + ":" + job_pathbuf.to_str().unwrap())
                 .arg(jobs_dir.to_str().unwrap())
-                .spawn()
-                .expect("Couldn't launch rsync");
+                .output()
+                .await
+                .expect("Couldn't launch rsync"); 
 
-            while let Ok(None) = rsync_from_serv.try_wait() {
-                tokio::time::delay_for(Duration::from_millis(100)).await;
-            }
 
             let input_file = String::from(jobs_dir.join(job_pathbuf.file_name().unwrap()).to_str().unwrap());
             let output_file = String::from(jobs_dir.join(job_pathbuf.file_stem().unwrap()).to_str().unwrap()) + &info.file_extension;
@@ -175,17 +193,14 @@ async fn main() {
 
             let ffmpeg_command = info.ffmpeg_command.split(" ").map(|w| w.replace("[input]", &input_file)).map(|w| w.replace("[output]", &output_file));
 
-            let mut conversion = std::process::Command::new("ffmpeg")
+            let conversion = tokio::process::Command::new("ffmpeg")
                 .args(ffmpeg_command.skip(1))
-                .spawn()
+                .output()
+                .await
                 .expect("Couldn't start ffmpeg");
 
-            while let Ok(None) = conversion.try_wait() {
-                tokio::time::delay_for(Duration::from_millis(100)).await;
-            }
 
-
-            let mut rsync_to_serv = std::process::Command::new("rsync")
+            let rsync_to_serv = tokio::process::Command::new("rsync")
                 .arg("-az")
                 .arg("--protect-args")
                 .arg("-e")
@@ -198,13 +213,9 @@ async fn main() {
                         + ":"
                         + &info.completed_files_dir
                 )
-                .spawn()
-                .expect("Couldn't run rsync");
-
-            while let Ok(None) = rsync_to_serv.try_wait() {
-                tokio::time::delay_for(Duration::from_millis(100)).await;
-            }
-
+                .output()
+                .await
+                .expect("Couldn't run rsync to server");
 
 
             if !std::path::Path::new(&output_file).exists() {
@@ -213,13 +224,16 @@ async fn main() {
                 let failure_info: NodeFailure = NodeFailure {
                     uuid:uuid.clone(),
                     timestamp_utc: Utc::now(),
-                    ffmepg_conversion: format!("{:?}",conversion.wait_with_output().unwrap()),
-                    rsync_from: format!("{:?}",rsync_from_serv.wait_with_output().unwrap()),
+                    ffmepg_conversion: ProcessOutput::new(&conversion), 
+                    rsync_from: ProcessOutput::new(&rsync_from_serv),
+                    rsync_to: ProcessOutput::new(&rsync_to_serv),
 
                 };
 
                 failure_request(serv_address.join("/failure").unwrap().to_string(), &failure_info).await;
-                panic!("Someting failed while converting\n Converion: {:?}\n Rsycn form server: {:?}",&failure_info,&failure_info);
+                panic!("Someting failed while converting\n Converion: {:?}\n Rsync form server: {:?} 
+                        \n Rsync to server: {:?}"
+                    ,&failure_info.ffmepg_conversion,&rsync_from_serv, &rsync_to_serv);
             }
 
 

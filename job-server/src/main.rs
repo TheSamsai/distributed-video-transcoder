@@ -48,13 +48,25 @@ type LastCheckIn = Arc<Mutex<HashMap<Uuid, Instant>>>;
 type AssignedWork = Arc<Mutex<HashMap<Uuid, PathBuf>>>;
 type WorkPool = Arc<Mutex<VecDeque<PathBuf>>>;
 
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
+#[derive(Debug)]
 struct NodeFailure {
     uuid: NodeUuid,
     timestamp_utc: DateTime<Utc>,
-    ffmepg_conversion: String,
-    rsync_from: String,
+    ffmepg_conversion:ProcessOutput,
+    rsync_from:ProcessOutput,
+    rsync_to:ProcessOutput,
 }
+
+#[derive(Deserialize)]
+#[derive(Debug)]
+struct ProcessOutput{
+    exit_code:i32,
+    stdout: String,
+    stderr: String
+}
+
+
 
 #[derive(Debug, Deserialize)]
 struct NodeUuid(String);
