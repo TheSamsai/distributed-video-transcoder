@@ -1,7 +1,11 @@
+#[macro_use] extern crate log;
+extern crate simplelog;
+
 extern crate reqwest;
 extern crate tokio;
 extern crate chrono;
 
+use simplelog::*;
 use reqwest::Result;
 use reqwest::Url;
 use std::env;
@@ -58,7 +62,8 @@ async fn get_uuid(address: String) -> Result<String> {
     let body = reqwest::get(&address).await?.text().await?;
 
     if body.len() == 0 {
-        panic!("UUID can not be empty");
+        error!("UUID can not be empty");
+        std::process::exit(1);
     }
     return Ok(body);
 }
@@ -88,6 +93,7 @@ async fn ping_timeout(address: String, uuid: String) {
             .await
             .expect("Error while pinging server");
 
+            debug!("PING");
         time::delay_for(Duration::from_secs(PING_TIMEOUT_SEC - 1)).await;
     }
 }
@@ -127,8 +133,40 @@ async fn get_job_info(address: String) -> Info {
     }
 }
 
+async fn init_logging() {
+
+    let term_level;
+    let write_level;
+    let file_name;
+
+    if cfg!(debug_assertions) {
+
+        term_level = simplelog::LevelFilter::Info;
+        write_level = simplelog::LevelFilter::Debug;
+        file_name = "DEBUG_node.log";
+    }
+    else {
+        term_level = simplelog::LevelFilter::Warn;
+        write_level = simplelog::LevelFilter::Info;
+        file_name = "node.log";
+    }
+
+    CombinedLogger::init(
+        vec![
+            TermLogger::new(term_level, Config::default(), TerminalMode::Mixed).unwrap(),
+            WriteLogger::new(write_level, Config::default(), 
+                std::fs::File::create(std::env::current_dir().unwrap().join(file_name)).unwrap()),
+        ]
+    ).unwrap(); 
+
+}
+
 #[tokio::main]
 async fn main() {
+
+    // Setup logging
+    init_logging().await;
+
     let args: Vec<String> = env::args().collect();
     let serv_address;
 
@@ -150,7 +188,7 @@ async fn main() {
         .await
         .unwrap();
 
-    println!("{}", uuid);
+    info!("UUID: {}", uuid);
     tokio::task::spawn(ping_timeout(
         serv_address.join("/ping").unwrap().into_string().clone(),
         uuid.clone(),
@@ -160,19 +198,21 @@ async fn main() {
         let job = job_requests(serv_address.join("/pull").unwrap().to_string(), &uuid)
             .await
             .unwrap();
-        println!("{}", job);
+
 
         if job.len() == 0 {
-            eprintln!("No available job paths");
+            debug!("No available job paths");
             //Sleep for PING_TIMEOUT_SEC -1 secs before asking for new jobs
             // -1 to give the scheduler some leeway so that the requset arrives surely on time
             time::delay_for(Duration::from_secs(PING_TIMEOUT_SEC - 1)).await;
         } else {
+
+            info!("New job: {}", job);
             let job_pathbuf = std::path::Path::new(&job);
 
             let info = get_job_info(serv_address.join("/info").unwrap().to_string()).await;
 
-            println!("rsync -az -e ssh --protect-args {} {}", info.rsync_user.clone() + "@" + serv_address.host_str().unwrap() + ":\"" + job_pathbuf.to_str().unwrap() + "\"", jobs_dir.to_str().unwrap());
+            debug!("rsync -az -e ssh --protect-args {} {}", info.rsync_user.clone() + "@" + serv_address.host_str().unwrap() + ":\"" + job_pathbuf.to_str().unwrap() + "\"", jobs_dir.to_str().unwrap());
 
             let rsync_from_serv = tokio::process::Command::new("rsync")
                 .arg("-az")
@@ -189,9 +229,12 @@ async fn main() {
             let input_file = String::from(jobs_dir.join(job_pathbuf.file_name().unwrap()).to_str().unwrap());
             let output_file = String::from(jobs_dir.join(job_pathbuf.file_stem().unwrap()).to_str().unwrap()) + &info.file_extension;
 
-            println!("{}", output_file);
+           
 
-            let ffmpeg_command = info.ffmpeg_command.split(" ").map(|w| w.replace("[input]", &input_file)).map(|w| w.replace("[output]", &output_file));
+            let ffmpeg_command = info.ffmpeg_command.split(" ").map(|w| w.replace("[input]", &input_file))
+                .map(|w| w.replace("[output]", &output_file));
+
+            info!("Converion started: {}", ffmpeg_command.clone().collect::<String>());
 
             let conversion = tokio::process::Command::new("ffmpeg")
                 .args(ffmpeg_command.skip(1))
@@ -199,6 +242,7 @@ async fn main() {
                 .await
                 .expect("Couldn't start ffmpeg");
 
+            info!("Conversion ready. Output file: {}", output_file);
 
             let rsync_to_serv = tokio::process::Command::new("rsync")
                 .arg("-az")
@@ -231,9 +275,10 @@ async fn main() {
                 };
 
                 failure_request(serv_address.join("/failure").unwrap().to_string(), &failure_info).await;
-                panic!("Someting failed while converting\n Converion: {:?}\n Rsync form server: {:?} 
+                error!("Someting failed while converting\n Converion: {:?}\n Rsync form server: {:?} 
                         \n Rsync to server: {:?}"
                     ,&failure_info.ffmepg_conversion,&rsync_from_serv, &rsync_to_serv);
+                std::process::exit(1);
             }
 
 
@@ -241,6 +286,8 @@ async fn main() {
             job_requests(serv_address.join("/push").unwrap().to_string(), &uuid)
                 .await
                 .unwrap();
+
+            info!("Job finished succesfully"); 
 
             std::fs::remove_file(&output_file).expect("Couldn't remove output file");
             std::fs::remove_file(&input_file).expect("Couldn't remove input file");
