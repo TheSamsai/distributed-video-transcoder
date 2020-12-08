@@ -11,6 +11,9 @@ directories.
 In order to build the software, you need the Rust compiler and cargo package
 manager. You can install them from https://rustup.rs/.
 
+The node-server connects trough ssh so ```RSYNC_USER``` in ```job-server/run.sh```
+needs to be able to authenticate trough ssh's public key authectication.
+
 ### Building job-server
 
 The job-server requires the latest nightly version of Rust which can be
@@ -36,6 +39,8 @@ submitted by moving video files into the ```incoming/``` directory.
 ### Building node-server
 
 The node-server is the worker component of the system.
+
+Node server needs **rsync** and **ffmpeg** to be installed.
 
 Then in the node-server directory run the following commands:
 
