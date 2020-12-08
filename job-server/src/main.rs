@@ -6,6 +6,9 @@ extern crate chrono;
 extern crate rocket_contrib;
 extern crate uuid;
 
+#[macro_use] extern crate log;
+extern crate simplelog;
+
 use rocket::http::Status;
 use rocket::request;
 use rocket::request::FromRequest;
@@ -17,6 +20,8 @@ use rocket_contrib::json::Json;
 use serde::Deserialize;
 
 use uuid::Uuid;
+
+use simplelog::*;
 
 mod inotify_watcher;
 
@@ -113,7 +118,9 @@ fn failure(
         }
        
         let ip = remote_addr.ip();
-        eprintln!("Node failed:\n IP: {:?}\n Failure: {:?}",ip,node_failure.0);
+        warn!("Node failed: IP: {:?} UUID: {:?} TIME UTC: {:?}",ip,node_failure.0.uuid, node_failure.timestamp_utc);
+        warn!("Failure info:\n FFMPEG: {:?}\n RSYNC FROM: {:?}\n RSYNC TO: {:?}"
+            ,node_failure.0.ffmepg_conversion,node_failure.0.rsync_from, node_failure.0.rsync_to);
         return String::from("Ok");
     }
     return String::from("");
@@ -168,8 +175,9 @@ fn push(
             .map(|fname| PathBuf::from(fname).with_extension(file_extension.replace(".", "")));
 
         if let Some(fname) = filename {
-            if completed_files_path.join(fname).exists() {
+            if completed_files_path.join(fname.clone()).exists() {
                 std::fs::remove_file(path);
+                info!("File succesfully pushed {}", completed_files_path.join(fname).to_str().unwrap());
                 return Ok(String::from("Thanks!"));
             } else {
                 let mut work_pool = pool.lock().unwrap();
@@ -194,6 +202,7 @@ fn reallocate_job(
         let instant = last_check_in.get(key).unwrap();
 
         if instant.elapsed() > Duration::new(60, 0) {
+            warn!("Job reallocated {}", key.clone().to_string()); 
             return assigned_work.remove(key);
         }
     }
@@ -218,11 +227,13 @@ fn pull(
 
         if let Some(path) = reallocate_job(&ci, &mut assigned_work) {
             assigned_work.insert(uuid, path.clone());
+            info!("Job pulled by UUID: {}",&uuid.to_string());
             return String::from(path.to_str().unwrap());
         }
 
         if let Some(path) = work_pool.pop_front() {
             assigned_work.insert(uuid, path.clone());
+            info!("Job pulled by UUID: {}",&uuid.to_string());
             return String::from(path.to_str().unwrap());
         }
     }
@@ -237,6 +248,8 @@ fn register(check_ins: State<LastCheckIn>) -> String {
     let uuid = Uuid::new_v4();
 
     ci.insert(uuid, Instant::now());
+
+    info!("New node registerd: UUID: {}", uuid.to_string());
 
     return format!("{}", uuid.to_urn());
 }
@@ -255,7 +268,37 @@ fn index(work_pool: State<WorkPool>) -> String {
     return files;
 }
 
+fn init_logging() {
+
+    let term_level;
+    let write_level;
+    let file_name;
+
+    if cfg!(debug_assertions) {
+
+        term_level = simplelog::LevelFilter::Info;
+        write_level = simplelog::LevelFilter::Debug;
+        file_name = "DEBUG_job-server.log";
+    }
+    else {
+        term_level = simplelog::LevelFilter::Warn;
+        write_level = simplelog::LevelFilter::Info;
+        file_name = "job-server.log";
+    }
+
+    CombinedLogger::init(
+        vec![
+            TermLogger::new(term_level, Config::default(), TerminalMode::Mixed).unwrap(),
+            WriteLogger::new(write_level, Config::default(), 
+                std::fs::File::create(std::env::current_dir().unwrap().join(file_name)).unwrap()),
+        ]
+    ).unwrap(); 
+
+}
+
 fn main() {
+    init_logging();
+
     let work_pool: WorkPool = Arc::new(Mutex::new(VecDeque::new()));
     let assigned_work: AssignedWork = Arc::new(Mutex::new(HashMap::new()));
     let last_check_in: LastCheckIn = Arc::new(Mutex::new(HashMap::new()));
