@@ -79,7 +79,7 @@ failure, which is the job server. However, this is partially accounted for by
 keeping the leader node's software implementation simple, thus largely limiting
 potential failures to hardware faults. The system can survive any number of
 silent failures from workers and has a system in place to reallocate work if a
-worker fails to check in regularly. It, however, cannot protect against
+worker fails to check in regularly.It, however, cannot protect against
 arbitrary failures or malicious workers.
 
 The job server can recover from crashes by being restarted. Since tasks are
@@ -87,6 +87,15 @@ stored on the filesystem (in the form of an incoming/completed directory, where
 video files are stored), it can continue operating close to where it crashed.
 However, all worker information and allocated tasks will be lost and in-progress
 tasks must be restarted.
+
+The largest failure point in workers is the calls to spawn subprocesses for rsync
+and ffmpeg, as failures in these processed are only noticed after the process has finished
+with its return code. These failures hard to handle automatically because they are 
+usually caused by configurations problems in the worker's operating system 
+(dependency not installed, wrong version, etc.). Currently, if the worker notices that
+the conversion process has failed, the sub processes outputs are logged with a timestamp.
+This information is also sent to the job server for centralized logging.
+Node also takes it self down so as a way to not cause continuous problems.
 
 Consistency concerns are minimal due to the leader being responsible for
 managing the majority of the system state. The workers are each allocated
